@@ -55,7 +55,14 @@ build_llama_cpp() {
     git clone --depth 1 --branch "$LLAMA_REF" https://github.com/ggml-org/llama.cpp "$BUILD_DIR"
   fi
   log "building llama.cpp (this is the slow part; GGML_NATIVE=on so it's tuned for your cpu)..."
-  cmake -S "$BUILD_DIR" -B "$BUILD_DIR/build" -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON >/dev/null
+  # armhf (32-bit) note: 64-bit atomic ops (__atomic_fetch_add_8 etc.) come from libatomic.
+  # -latomic must appear AFTER the object files on the link line; the Pi's gcc driver
+  # defaults to --as-needed, so -latomic passed via CMAKE_*_LINKER_FLAGS (which lands
+  # before the objects) gets dropped by ld and linking fails with
+  # "undefined reference to __atomic_fetch_add_8". CMake appends
+  # CMAKE_C/CXX_STANDARD_LIBRARIES at the end of the link line, which is what we want.
+  cmake -S "$BUILD_DIR" -B "$BUILD_DIR/build" -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
+    -DCMAKE_C_STANDARD_LIBRARIES="-latomic" -DCMAKE_CXX_STANDARD_LIBRARIES="-latomic" >/dev/null
   cmake --build "$BUILD_DIR/build" --config Release -j "$(nproc)" >/dev/null
   log "built: $BUILD_DIR/build/bin/llama-server"
 }
