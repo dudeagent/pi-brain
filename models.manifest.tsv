@@ -1,0 +1,5 @@
+# pi-brain model manifest — tab separated: name, gguf filename, download url, approximate size on disk (mb), min ram to run it (mb), ram cost per context token (kb), max context window
+# all files are downloaded onto the disk by install.sh; serve.sh decides which one to actually run.
+qwen3-0.6b	Qwen_Qwen3-0.6B-Q4_K_M.gguf	https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/resolve/main/Qwen_Qwen3-0.6B-Q4_K_M.gguf	477	1800	112	8192
+qwen3-1.7b	Qwen_Qwen3-1.7B-Q4_K_M.gguf	https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen_Qwen3-1.7B-Q4_K_M.gguf	1100	3800	112	8192
+smollm3-3b	SmolLM3-Q4_K_M.gguf	https://huggingface.co/ggml-org/SmolLM3-3B-GGUF/resolve/main/SmolLM3-Q4_K_M.gguf	1860	5800	74	8192
