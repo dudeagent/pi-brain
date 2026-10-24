@@ -34,13 +34,13 @@ chmod +x "$fakebin/curl"
 # stub pi: records its args, exits 0
 cat >"$fakebin/pi" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$@" > "$PI_ARGS_OUT"
+printf '%s\n' "$*" > "$PI_ARGS_OUT"
 EOF
 chmod +x "$fakebin/pi"
 
 export SERVER_READY="$tmp/ready"
 export PI_ARGS_OUT="$tmp/pi_args"
-export STUBBED_ENV="PATH=$fakebin HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT"
+export STUBBED_ENV="PATH=$fakebin:/usr/bin:/bin HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT SERVE_SCRIPT=serve.sh"
 
 # 1. warm start + config write + pi launch
 out="$(env $STUBBED_ENV bash "$PI_SH" "hello world" 2>&1)"
