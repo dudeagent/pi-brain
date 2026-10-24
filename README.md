@@ -35,12 +35,18 @@ a pi 4 does roughly ~5-8 tokens/sec for a 1-2b model at q4. that's fine for a to
 local agent, chat, and tinkering. it is not a replacement for a cloud model on real
 agentic runs. keep the context window small so the kv cache fits in ram.
 
-## step 2 (in progress): fully local style
+## internet-in-a-box packer (`usb-pack.py`)
 
-see the [`local-style` branch](https://github.com/dudeagent/pi-brain/pulls) — a
-version with **zero runtime dependencies on the internet**: every model file is
-downloaded onto the disk up front, a hand-built llama.cpp serves them, and a
-launcher decides which one to actually run based on the ram available at boot.
+pack a 32 gb usb drive with an offline internet: curated kiwix zim archives
+(wikipedia, gutenberg, ifixit, stackexchange, wikivoyage...) picked from kiwix's
+live catalog to fit your budget, plus the **kiwix-js browser viewer bundled on
+the drive** (unpacked chrome/edge extension + firefox xpi) and a `START_HERE.html`
+that walks whoever plugs it in through opening the files — no internet needed.
+
+```bash
+python3 usb_pack.py --list                        # show the plan
+python3 usb_pack.py --target /media/usb --budget-gib 26
+```
 
 ## license
 
