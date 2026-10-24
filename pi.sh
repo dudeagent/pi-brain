@@ -27,7 +27,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVE_SCRIPT="${SERVE_SCRIPT:-${SCRIPT_DIR}/serve.sh}"
 SERVER_LOG="${SCRIPT_DIR}/serve.log"
 
-command -v pi >/dev/null 2>&1 || die "pi not found on PATH — install the pi coding agent first"
+command -v pi >/dev/null 2>&1 || {
+  log "pi not found — installing..."
+  if command -v npm >/dev/null 2>&1; then
+    if npm install -g @mariozechner/pi-coding-agent; then
+      log "pi installed via npm"
+      # make sure npm's global bin dir is on PATH (not always the case)
+      NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null || true)/bin"
+      [ -d "$NPM_GLOBAL_BIN" ] && export PATH="$NPM_GLOBAL_BIN:${PATH}"
+    else
+      # global install may hit EACCES; retry in user space
+      log "global npm install failed, trying user prefix..."
+      mkdir -p "${HOME}/.npm-global"
+      npm config set prefix "${HOME}/.npm-global"
+      npm install -g @mariozechner/pi-coding-agent || die "npm install failed — install pi manually (npm i -g @mariozechner/pi-coding-agent)"
+      export PATH="${HOME}/.npm-global/bin:${PATH}"
+      log "pi installed to ${HOME}/.npm-global/bin — add that to your PATH for future shells"
+    fi
+  elif command -v bun >/dev/null 2>&1; then
+    bun install -g @mariozechner/pi-coding-agent || die "bun install failed — install pi manually"
+  else
+    die "no npm/bun found — install node first, or install pi manually: https://github.com/badlogic/pi-mono"
+  fi
+  command -v pi >/dev/null 2>&1 || die "pi still not on PATH after install — check your PATH"
+}
 
 # --- 1. ensure the local server is running ---------------------------------
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tests for pi.sh — no real server or pi install required.
 # pi.sh is run with a stubbed PATH (serve.sh/curl/pi faked) in "warm start"
-# mode (server already up), which exercises the config-writing and pi-launch
-# logic — the part that matters. the boot-wait path is trivial and skipped.
+# mode (server already up), which exercises the config-writing, install-if-missing
+# and pi-launch logic. the boot-wait path is trivial and skipped.
 set -uo pipefail
 failures=0
 pass() { echo "PASS: $*"; }
@@ -40,7 +40,8 @@ chmod +x "$fakebin/pi"
 
 export SERVER_READY="$tmp/ready"
 export PI_ARGS_OUT="$tmp/pi_args"
-export STUBBED_ENV="PATH=$fakebin:/usr/bin:/bin HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT SERVE_SCRIPT=serve.sh"
+# /usr/bin:/bin needed: pi.sh uses cat/mktemp and grep-free shell builtins
+STUBBED_ENV="PATH=$fakebin:/usr/bin:/bin HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT SERVE_SCRIPT=serve.sh"
 
 # 1. warm start + config write + pi launch
 out="$(env $STUBBED_ENV bash "$PI_SH" "hello world" 2>&1)"
@@ -66,5 +67,38 @@ env $STUBBED_ENV bash "$PI_SH" --setup-only >/dev/null 2>&1
 # 4. idempotent rerun keeps a valid provider entry
 env $STUBBED_ENV bash "$PI_SH" --setup-only >/dev/null 2>&1
 grep -q '"pi-brain"' "$home/.pi/agent/models.json" && pass "rerun keeps provider" || fail "rerun broke models.json"
+
+# 5. pi missing -> installer runs (fake npm), pi lands in PATH and is used
+fakebin2="$tmp/bin2"; mkdir -p "$fakebin2"
+cp "$fakebin/serve.sh" "$fakebin2/serve.sh"
+cp "$fakebin/curl" "$fakebin2/curl"
+npmglobal="$home/.npm-global"; mkdir -p "$npmglobal/bin"
+cat >"$fakebin2/npm" <<EOF
+#!/usr/bin/env bash
+# fake npm: on install -g, drop a pi stub into the configured prefix
+if [ "\$1" = "install" ] && [ "\$2" = "-g" ]; then
+  mkdir -p "$npmglobal/bin"
+  printf '#!/bin/bash\nprintf "%%s\\n" "\$*" > "$PI_ARGS_OUT"\n' > "$npmglobal/bin/pi"
+  chmod +x "$npmglobal/bin/pi"
+  exit 0
+fi
+if [ "\$1" = "prefix" ] && [ "\$2" = "-g" ]; then echo "$npmglobal"; exit 0; fi
+exit 1
+EOF
+chmod +x "$fakebin2/npm"
+: > "$PI_ARGS_OUT"
+out2="$(env PATH="$fakebin2:/usr/bin:/bin" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin2/serve.sh" bash "$PI_SH" "after install" 2>&1)"
+echo "$out2" | grep -q "pi not found" && pass "detects missing pi" || fail "should log pi missing (got: $out2)"
+echo "$out2" | grep -q "pi installed" && pass "installs pi via npm" || fail "should log pi installed"
+[ -x "$npmglobal/bin/pi" ] && pass "pi created in npm prefix" || fail "no pi in npm prefix"
+args2="$(cat "$PI_ARGS_OUT")"
+[ "$args2" = "--model pi-brain/qwen3-1.7b after install" ] && pass "pi runs after install" || fail "pi not invoked after install: $args2"
+
+# 6. no npm either -> clear error, no install
+fakebin3="$tmp/bin3"; mkdir -p "$fakebin3"
+cp "$fakebin/serve.sh" "$fakebin3/serve.sh"
+cp "$fakebin/curl" "$fakebin3/curl"
+out3="$(env PATH="$fakebin3:/usr/bin:/bin" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin3/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
+echo "$out3" | grep -q "no npm/bun found" && pass "clear error without npm/bun" || fail "should error clearly without npm (got: $out3)"
 
 if [ "$failures" -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "$failures test(s) FAILED"; exit 1; fi
