@@ -16,6 +16,13 @@ trap 'rm -rf "$tmp"' EXIT
 fakebin="$tmp/bin"; mkdir -p "$fakebin"
 home="$tmp/home"; mkdir -p "$home/.pi/agent"
 
+# minimal toolset for pi.sh's PATH — /usr/bin:/bin would leak the host's real
+# node/npm (they exist on this system) into tests that expect them missing
+basics="$tmp/basics"; mkdir -p "$basics"
+for t in bash sh cat mkdir chmod touch dirname basename cut grep head tail sed awk uname tar sleep nohup env stat true false; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -s "$p" "$basics/$t"
+done
+
 # stub serve.sh: --print-config returns a fixed pick
 cat >"$fakebin/serve.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -40,8 +47,8 @@ chmod +x "$fakebin/pi"
 
 export SERVER_READY="$tmp/ready"
 export PI_ARGS_OUT="$tmp/pi_args"
-# /usr/bin:/bin needed: pi.sh uses cat/mktemp and grep-free shell builtins
-STUBBED_ENV="PATH=$fakebin:/usr/bin:/bin HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT SERVE_SCRIPT=serve.sh"
+# basics dir provides everything pi.sh needs without leaking host node/npm
+STUBBED_ENV="PATH=$fakebin:$basics HOME=$home PI_ARGS_OUT=$PI_ARGS_OUT SERVE_SCRIPT=serve.sh"
 
 # 1. warm start + config write + pi launch
 out="$(env $STUBBED_ENV bash "$PI_SH" "hello world" 2>&1)"
@@ -72,6 +79,12 @@ grep -q '"pi-brain"' "$home/.pi/agent/models.json" && pass "rerun keeps provider
 fakebin2="$tmp/bin2"; mkdir -p "$fakebin2"
 cp "$fakebin/serve.sh" "$fakebin2/serve.sh"
 cp "$fakebin/curl" "$fakebin2/curl"
+# node stub so ensure_node sees node present and skips its own install
+cat >"$fakebin2/node" <<'EOF'
+#!/usr/bin/env bash
+echo "v20.0.0"
+EOF
+chmod +x "$fakebin2/node"
 npmglobal="$home/.npm-global"; mkdir -p "$npmglobal/bin"
 cat >"$fakebin2/npm" <<EOF
 #!/usr/bin/env bash
@@ -87,18 +100,85 @@ exit 1
 EOF
 chmod +x "$fakebin2/npm"
 : > "$PI_ARGS_OUT"
-out2="$(env PATH="$fakebin2:/usr/bin:/bin" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin2/serve.sh" bash "$PI_SH" "after install" 2>&1)"
+out2="$(env PATH="$fakebin2:$basics" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin2/serve.sh" bash "$PI_SH" "after install" 2>&1)"
 echo "$out2" | grep -q "pi not found" && pass "detects missing pi" || fail "should log pi missing (got: $out2)"
 echo "$out2" | grep -q "pi installed" && pass "installs pi via npm" || fail "should log pi installed"
 [ -x "$npmglobal/bin/pi" ] && pass "pi created in npm prefix" || fail "no pi in npm prefix"
 args2="$(cat "$PI_ARGS_OUT")"
 [ "$args2" = "--model pi-brain/qwen3-1.7b after install" ] && pass "pi runs after install" || fail "pi not invoked after install: $args2"
 
-# 6. no npm either -> clear error, no install
+# 6. no node/npm either -> ensure_node fails at download, clear error
 fakebin3="$tmp/bin3"; mkdir -p "$fakebin3"
 cp "$fakebin/serve.sh" "$fakebin3/serve.sh"
 cp "$fakebin/curl" "$fakebin3/curl"
-out3="$(env PATH="$fakebin3:/usr/bin:/bin" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin3/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
-echo "$out3" | grep -q "no npm/bun found" && pass "clear error without npm/bun" || fail "should error clearly without npm (got: $out3)"
+out3="$(env PATH="$fakebin3:$basics" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin3/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
+echo "$out3" | grep -q "install node manually" && pass "clear error without node/npm" || fail "should error clearly without node/npm (got: $out3)"
+
+# 7. ensure_node via apt-get: fake apt installs node+npm stubs, pi.sh proceeds
+fakebin4="$tmp/bin4"; mkdir -p "$fakebin4"
+cp "$fakebin/serve.sh" "$fakebin4/serve.sh"
+cp "$fakebin/curl" "$fakebin4/curl"
+# apt-get stub so ensure_node's 'command -v apt-get' check succeeds
+# (the sudo stub below intercepts the actual calls)
+cat >"$fakebin4/apt-get" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$fakebin4/apt-get"
+apt_installed="$tmp/apt-installed"
+cat >"$fakebin4/sudo" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "apt-get" ]; then
+  printf '#!/usr/bin/env bash\necho "v20.0.0"\n' > "$fakebin4/node"
+  printf '#!/usr/bin/env bash\necho "fake npm via apt"\n' > "$fakebin4/npm"
+  chmod +x "$fakebin4/node" "$fakebin4/npm"
+  touch "$apt_installed"
+  exit 0
+fi
+exec "$@"
+EOF
+chmod +x "$fakebin4/sudo"
+: > "$PI_ARGS_OUT"
+out4="$(env PATH="$fakebin4:$basics" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin4/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
+echo "$out4" | grep -q "node installed via apt" && pass "ensure_node installs node via apt" || fail "should install node via apt (got: $out4)"
+[ -f "$apt_installed" ] && pass "apt-get was called" || fail "apt-get not called"
+
+# 8. ensure_node: node present but npm missing -> still triggers install path
+fakebin5="$tmp/bin5"; mkdir -p "$fakebin5"
+cp "$fakebin/serve.sh" "$fakebin5/serve.sh"
+cp "$fakebin/curl" "$fakebin5/curl"
+cat >"$fakebin5/node" <<'EOF'
+#!/usr/bin/env bash
+echo "v20.0.0"
+EOF
+chmod +x "$fakebin5/node"
+out5="$(env PATH="$fakebin5:$basics" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin5/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
+echo "$out5" | grep -q "node/npm not found" && pass "node-only still triggers ensure_node" || fail "node without npm should trigger install (got: $out5)"
+
+# 9. ensure_node: static binary fallback when apt is absent
+fakebin6="$tmp/bin6"; mkdir -p "$fakebin6"
+cp "$fakebin/serve.sh" "$fakebin6/serve.sh"
+# fake tar: succeeds without unpacking (curl stub writes the files itself)
+cat >"$fakebin6/tar" <<'TAR'
+#!/usr/bin/env bash
+exit 0
+TAR
+chmod +x "$fakebin6/tar"
+cat >"$fakebin6/curl" <<EOF
+#!/usr/bin/env bash
+if [[ "\$@" == *"nodejs.org"* ]]; then
+  node_dest="$home/.pi-brain/node"
+  mkdir -p "\$node_dest/bin"
+  printf '#!/usr/bin/env bash\necho "v20.0.0-static"\n' > "\$node_dest/bin/node"
+  printf '#!/usr/bin/env bash\necho "fake npm static"\n' > "\$node_dest/bin/npm"
+  chmod +x "\$node_dest/bin/node" "\$node_dest/bin/npm"
+  exit 0
+fi
+echo '{"data":[]}'
+EOF
+chmod +x "$fakebin6/curl"
+out6="$(env PATH="$fakebin6:$basics" HOME="$home" PI_ARGS_OUT="$PI_ARGS_OUT" SERVE_SCRIPT="$fakebin6/serve.sh" bash "$PI_SH" "x" 2>&1 || true)"
+echo "$out6" | grep -q "installed at" && pass "ensure_node static fallback installs node" || fail "should install node via static binary (got: $out6)"
+[ -x "$home/.pi-brain/node/bin/npm" ] && pass "static node created" || fail "no static node"
 
 if [ "$failures" -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "$failures test(s) FAILED"; exit 1; fi

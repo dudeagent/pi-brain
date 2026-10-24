@@ -27,8 +27,46 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVE_SCRIPT="${SERVE_SCRIPT:-${SCRIPT_DIR}/serve.sh}"
 SERVER_LOG="${SCRIPT_DIR}/serve.log"
 
+# make sure node+npm exist; if not, try apt then a static binary download
+ensure_node() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    log "node $(node --version) + npm already present"
+    return 0
+  fi
+  log "node/npm not found — installing..."
+  if command -v apt-get >/dev/null 2>&1; then
+    log "trying apt-get..."
+    if (sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm) \
+      && command -v npm >/dev/null 2>&1; then
+      log "node installed via apt ($(node --version))"
+      return 0
+    fi
+    log "apt install failed or too old — falling back to official binary"
+  fi
+  # fallback: self-contained node in ~/.pi-brain/node (no sudo needed)
+  NODE_VER="${NODE_VER:-v20.18.1}"
+  local arch
+  case "$(uname -m)" in
+    aarch64|arm64) arch="arm64" ;;
+    x86_64)        arch="x64" ;;
+    armv7l)        arch="armv7l" ;;
+    *) die "unsupported arch for node: $(uname -m) — install node manually" ;;
+  esac
+  local dest="${HOME}/.pi-brain/node"
+  if [ ! -x "${dest}/bin/npm" ]; then
+    log "downloading node ${NODE_VER} (${arch}) to ${dest}..."
+    mkdir -p "${dest}"
+    local url="https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-linux-${arch}.tar.gz"
+    curl -fsSL "$url" | tar -xz --strip-components=1 -C "${dest}" \
+      || die "node download failed — install node manually"
+  fi
+  export PATH="${dest}/bin:${PATH}"
+  log "node $(node --version) installed at ${dest}"
+}
+
 command -v pi >/dev/null 2>&1 || {
   log "pi not found — installing..."
+  ensure_node
   if command -v npm >/dev/null 2>&1; then
     if npm install -g @mariozechner/pi-coding-agent; then
       log "pi installed via npm"
