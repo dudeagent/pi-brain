@@ -61,6 +61,19 @@ on real agentic runs.
 ./test.sh    # unit + stubbed end-to-end, no real installs or downloads
 ```
 
+## internet-in-a-box packer (`usb-pack.py`)
+
+pack a 32 gb usb drive with an offline internet: curated kiwix zim archives
+(wikipedia, gutenberg, ifixit, stackexchange, wikivoyage...) picked from kiwix's
+live catalog to fit your budget, plus the **kiwix-js browser viewer bundled on
+the drive** (unpacked chrome/edge extension + firefox xpi) and a `START_HERE.html`
+that walks whoever plugs it in through opening the files — no internet needed.
+
+```bash
+python3 usb_pack.py --list                        # show the plan
+python3 usb_pack.py --target /media/usb --budget-gib 26
+```
+
 ## license
 
 mit
