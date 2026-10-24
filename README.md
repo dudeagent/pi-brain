@@ -72,7 +72,12 @@ that walks whoever plugs it in through opening the files — no internet needed.
 ```bash
 python3 usb_pack.py --list                        # show the plan
 python3 usb_pack.py --target /media/usb --budget-gib 26
+python3 usb_pack.py --viewer-only --target /media/usb   # drive already has zims? just add the viewer
 ```
+
+`--viewer-only` downloads nothing — it drops the kiwix-js viewer + a
+`START_HERE.html` next to zim content that's already on the stick (it reads the
+existing `manifest.tsv` if present, else globs `*.zim`).
 
 ## license
 

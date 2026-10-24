@@ -20,6 +20,7 @@ usage:
 """
 
 import argparse
+import glob
 import hashlib
 import io
 import zipfile
@@ -313,6 +314,35 @@ any modern browser.</p>
 </body></html>"""
 
 
+def load_manifest_rows(target):
+    """rebuild the drive listing for START_HERE when we didn't just download it:
+    prefer the manifest.tsv written by a previous full pack, else glob the zims.
+    returns rows in the same (name, file, size_bytes, source, title) shape."""
+    manifest_path = os.path.join(target, "manifest.tsv")
+    rows = []
+    seen = set()
+    if os.path.isfile(manifest_path):
+        with open(manifest_path) as f:
+            for line in f.readlines()[1:]:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 5:
+                    continue
+                name, file, size_bytes, source, title = parts
+                if not os.path.isfile(os.path.join(target, file)):
+                    log(f"warning: {file} in manifest.tsv is missing on the drive; skipped")
+                    continue
+                rows.append((name, file, int(size_bytes), source, title))
+                seen.add(file)
+    # anything on the drive that the manifest doesn't account for still gets listed
+    for path in sorted(glob.glob(os.path.join(target, "*.zim"))):
+        fname = os.path.basename(path)
+        if fname not in seen:
+            rows.append((fname, fname, os.path.getsize(path), "", fname))
+    if not rows:
+        log("warning: no zim content found on the drive")
+    return rows
+
+
 def pack_viewer(target, chrome_dir=CHROME_EXT_DIR, firefox_rel=FIREFOX_XPI_REL):
     """bundle kiwix-js (chrome unpacked + firefox xpi) + a START_HERE.html on the drive."""
     unpack_crx(CHROME_CRX_URL, os.path.join(target, "viewer"))
@@ -392,7 +422,28 @@ def main(argv=None):
                                        "(default: download straight to target)")
     p.add_argument("--list", action="store_true", help="show the plan only")
     p.add_argument("--no-verify", action="store_true", help="skip sha256 verification")
+    p.add_argument("--viewer-only", action="store_true",
+                   help="don't download anything — just add the kiwix-js viewer "
+                        "(+ START_HERE.html) to a drive that already has zim content")
     args = p.parse_args(argv)
+
+    if args.viewer_only:
+        if not args.target:
+            p.error("--target is required with --viewer-only")
+        target = args.target
+        check_target(target)
+        usb_or_warn(target)
+        if not glob.glob(os.path.join(target, "*.zim")):
+            raise SystemExit(f"error: no .zim files found in {target} — nothing for the viewer to open")
+        chrome_dir, firefox_xpi = pack_viewer(target)
+        manifest = load_manifest_rows(target)
+        if not manifest:
+            raise SystemExit(f"error: no readable zim content in {target}")
+        with open(os.path.join(target, START_HERE), "w") as f:
+            f.write(build_start_here_page(manifest, chrome_dir, firefox_xpi))
+        log(f"wrote {START_HERE} — open it on any computer and follow the viewer install steps")
+        log(f"done — viewer added to {target} (content untouched)")
+        return 0
 
     budget = int(args.budget_gib * 2**30)
     books = fetch_catalog()

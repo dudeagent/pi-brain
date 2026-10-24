@@ -132,6 +132,80 @@ for needle in ("Load unpacked", "developer mode", "about:debugging", "wikipedia_
                "chrome://extensions", "Allow access to file URLs"):
     check(needle in html, f"START_HERE page mentions: {needle}")
 
+# --- viewer-only mode: bolt the view layer onto a content-only stick ---------
+import argparse
+
+with tempfile.TemporaryDirectory() as target:
+    # content-only stick: two zims + a manifest.tsv (one stale row on purpose)
+    for zf, mb in (("wikipedia_en_all_mini_2026-09.zim", 700), ("wikivoyage_en_all_2026-09.zim", 100)):
+        with open(os.path.join(target, zf), "wb") as f:
+            f.write(b"z" * mb)
+    with open(os.path.join(target, "manifest.tsv"), "w") as f:
+        f.write("name\tfile\tsize_bytes\tsource\ttitle\n")
+        f.write("wikipedia_en_all_mini\twikipedia_en_all_mini_2026-09.zim\t%d\tu\tWikipedia (mini)\n" % 700)
+        f.write("ghost_en_all\tdeleted_en_all_2026-01.zim\t50\tu\tGhost book\n")
+
+    orig_unpack, orig_fetch, orig_usb, orig_check = (
+        usb_pack.unpack_crx, usb_pack.fetch_firefox_xpi, usb_pack.usb_or_warn, usb_pack.check_target)
+    unpacked = {}
+    def fake_unpack(url, dest_dir, payload_zip=None):
+        d = os.path.join(dest_dir, "chrome")
+        os.makedirs(d)
+        unpacked["url"] = url
+        return d
+    def fake_fetch(dest_dir, payload=None):
+        p = os.path.join(dest_dir, usb_pack.FIREFOX_XPI_REL)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").close()
+        return p
+    try:
+        usb_pack.unpack_crx, usb_pack.fetch_firefox_xpi, usb_pack.usb_or_warn = fake_unpack, fake_fetch, lambda t: None
+        usb_pack.check_target = lambda t: None
+        rc = usb_pack.main(["--viewer-only", "--target", target])
+    finally:
+        usb_pack.unpack_crx, usb_pack.fetch_firefox_xpi, usb_pack.usb_or_warn = orig_unpack, orig_fetch, orig_usb
+        usb_pack.check_target = orig_check
+    check(rc == 0, "viewer-only run exits 0")
+    check(os.path.isfile(os.path.join(target, "viewer/chrome/manifest.json")) or
+          os.path.isdir(os.path.join(target, "viewer/chrome")), "viewer packed onto drive")
+    check(os.path.isfile(os.path.join(target, usb_pack.FIREFOX_XPI_REL)), "firefox xpi on drive")
+    sh = open(os.path.join(target, usb_pack.START_HERE)).read()
+    check("Wikipedia (mini)" in sh, "START_HERE lists titles from manifest.tsv")
+    check("Ghost book" not in sh, "stale manifest row (file gone) dropped")
+    check("wikivoyage_en_all_2026-09.zim" in sh, "drive-side zim not in manifest still listed")
+    zim_sizes_ok = all(os.path.getsize(os.path.join(target, f)) == s
+                       for f, s in (("wikipedia_en_all_mini_2026-09.zim", 700), ("wikivoyage_en_all_2026-09.zim", 100)))
+    check(zim_sizes_ok, "viewer-only didn't touch the zim content")
+
+# fallback when there's no manifest at all
+with tempfile.TemporaryDirectory() as target:
+    with open(os.path.join(target, "only_thing.zim"), "wb") as f:
+        f.write(b"z" * 10)
+    rows = usb_pack.load_manifest_rows(target)
+    check(len(rows) == 1 and rows[0][1] == "only_thing.zim", "manifest fallback: globs zims on drive")
+
+# viewer-only refuses a stick with no zims
+with tempfile.TemporaryDirectory() as target:
+    os.makedirs(os.path.join(target, "x"))
+    orig_check = usb_pack.check_target
+    try:
+        usb_pack.check_target = lambda t: None
+        usb_pack.main(["--viewer-only", "--target", target])
+        check(False, "viewer-only rejects zim-less drive")
+    except SystemExit as e:
+        check("no .zim files found" in str(e), "viewer-only rejects zim-less drive")
+    finally:
+        usb_pack.check_target = orig_check
+
+# --viewer-only without --target errors
+try:
+    usb_pack.main(["--viewer-only"])
+    check(False, "viewer-only requires --target")
+except argparse.ArgumentTypeError:
+    pass
+except SystemExit:
+    pass
+
 # syntax check the whole script
 r = subprocess.run([sys.executable, "-m", "py_compile", os.path.join(os.path.dirname(os.path.abspath(__file__)), "usb_pack.py")])
 check(r.returncode == 0, "usb_pack.py compiles")
